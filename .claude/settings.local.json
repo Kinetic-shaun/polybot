@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python example.py:*)",
+      "Bash(python run_bot.py:*)",
+      "Bash(python -c:*)",
+      "Bash(python check_credentials.py:*)",
+      "Bash(python test_markets.py:*)",
+      "Bash(python test_closed_loop.py:*)",
+      "Bash(python -m json.tool:*)"
+    ]
+  }
+}
