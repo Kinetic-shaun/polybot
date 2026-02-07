@@ -116,6 +116,10 @@ def print_dashboard(analyzer: PolymarketAnalyzer, report: Dict):
             resolved = cat_data.get("resolved_markets", 0)
             yes_rate_str = cat_data.get("yes_rate", "N/A")
             volume = cat_data.get("total_volume", 0)
+            try:
+                volume = float(volume)
+            except (ValueError, TypeError):
+                volume = 0
             volume_str = f"${volume:,.0f}" if volume > 0 else "-"
 
             print(f"{cat_name:<15} {cat_data.get('total_markets', 0):<8} {resolved:<8} {yes_rate_str:<12} {volume_str:<15}")
@@ -290,6 +294,10 @@ def run_trader_analysis(address: str, days: int):
     """运行交易人分析"""
     print(f"\n正在分析交易人: {address[:10]}... (最近 {days} 天)")
 
+    from polymarket_bot.analyzer import TraderAnalyzer, DOMAIN_CATEGORIES
+    from datetime import datetime
+    import json
+
     analyzer = TraderAnalyzer()
 
     try:
@@ -299,23 +307,243 @@ def run_trader_analysis(address: str, days: int):
             print(f"\n未找到该交易人的历史交易记录")
             return
 
-        analyzer.print_trader_report(profile)
+        trades = analyzer.get_trader_trades(address, days=days, limit=100)
 
-        # 生成跟单建议
-        recommendations = analyzer.get_copy_trading_recommendations(profile)
+        print('=' * 70)
+        print('  POLYMARKET 交易人深度分析')
+        print('=' * 70)
 
-        print("\n【基于分析生成的跟单配置】")
-        print(f"\n运行跟单:")
-        print(f"  python run_bot.py copy \\")
-        print(f"    --target-user {address} \\")
-        print(f"    --copy-amount {recommendations['copy_amount']:.0f} \\")
-        print(f"    --max-copy-size {recommendations['max_copy_size']:.0f} \\")
-        print(f"    --time-window {recommendations['time_window']}")
+        print(f'\n📊 获取到 {len(trades)} 笔交易\n')
 
-        if recommendations['allow_dca']:
-            print(f"    --allow-dca")
+        if not trades:
+            print('未获取到交易数据')
+            return
 
-        print("\n" + "=" * 70)
+        # 基础统计
+        buy_trades = [t for t in trades if t.get('side', '').upper() == 'BUY']
+        sell_trades = [t for t in trades if t.get('side', '').upper() == 'SELL']
+
+        total_size = sum(float(t.get('size', 0)) for t in trades)
+        avg_size = total_size / len(trades) if trades else 0
+
+        # 价格统计
+        prices = [float(t.get('price', 0)) for t in trades if t.get('price')]
+        avg_price = sum(prices) / len(prices) if prices else 0
+
+        # 高价/低价交易
+        high_price = [t for t in trades if float(t.get('price', 0)) > 0.5]
+        low_price = [t for t in trades if float(t.get('price', 0)) <= 0.5]
+        high_pct = len(high_price) / len(trades) * 100 if trades else 0
+
+        print('─' * 70)
+        print('【交易概览】')
+        print('─' * 70)
+        print(f'  总交易数:     {len(trades)}')
+        print(f'  买入次数:     {len(buy_trades)} ({len(buy_trades)/len(trades)*100:.0f}%)')
+        print(f'  卖出次数:     {len(sell_trades)} ({len(sell_trades)/len(trades)*100:.0f}%)')
+        print(f'  总交易金额:   ${total_size:,.2f}')
+        print(f'  平均每笔:     ${avg_size:,.2f}')
+        print(f'  平均价格:     {avg_price:.2%}')
+
+        print('\n─' * 70)
+        print('【价格分布】')
+        print('─' * 70)
+        high_pct = len(high_price) / len(trades) * 100 if trades else 0
+        low_pct = len(low_price) / len(trades) * 100 if trades else 0
+        print(f'  高价交易 (>50%): {len(high_price)} ({high_pct:.0f}%)')
+        print(f'  低价交易 (<=50%): {len(low_price)} ({low_pct:.0f}%)')
+
+        # 时间分析
+        print('\n─' * 70)
+        print('【时间分布】')
+        print('─' * 70)
+        timestamps = []
+        for t in trades:
+            ts = t.get('timestamp')
+            if ts:
+                try:
+                    dt = datetime.fromtimestamp(int(ts))
+                    timestamps.append(dt)
+                except:
+                    pass
+
+        if timestamps:
+            timestamps.sort()
+            first_ts = timestamps[0]
+            last_ts = timestamps[-1]
+            days_span = (last_ts - first_ts).days + 1
+            trades_per_day = len(trades) / max(days_span, 1)
+
+            print(f'  交易跨度:    {days_span} 天')
+            print(f'  日均交易:    {trades_per_day:.1f} 笔')
+            print(f'  最早交易:    {first_ts.strftime("%Y-%m-%d")}')
+            print(f'  最新交易:    {last_ts.strftime("%Y-%m-%d")}')
+
+        # 标题分析（提取关键词）
+        print('\n─' * 70)
+        print('【交易主题分析】')
+        print('─' * 70)
+        titles = [t.get('title', t.get('name', '')) for t in trades]
+        title_counts = {}
+        for title in titles:
+            if not title:
+                continue
+            # 简单分类
+            title_lower = title.lower()
+            category = 'Other'
+            for cat, config in DOMAIN_CATEGORIES.items():
+                if cat == 'Other':
+                    continue
+                for kw in config['keywords']:
+                    if kw.lower() in title_lower:
+                        category = cat
+                        break
+            title_counts[category] = title_counts.get(category, 0) + 1
+
+        print('  领域分布:')
+        for cat, count in sorted(title_counts.items(), key=lambda x: -x[1]):
+            pct = count / len(trades) * 100
+            print(f'    {cat}: {count} 笔 ({pct:.0f}%)')
+
+        # 显示代表性交易
+        print('\n─' * 70)
+        print('【代表性交易】')
+        print('─' * 70)
+
+        # 按金额排序
+        sorted_by_size = sorted(trades, key=lambda x: float(x.get('size', 0)), reverse=True)[:5]
+        print('  最大金额交易:')
+        for i, t in enumerate(sorted_by_size, 1):
+            ts = t.get('timestamp', 'N/A')
+            if ts:
+                try:
+                    dt = datetime.fromtimestamp(int(ts))
+                    ts_str = dt.strftime("%m-%d %H:%M")
+                except:
+                    ts_str = ts
+            else:
+                ts_str = 'N/A'
+            title = t.get('title', t.get('name', 'N/A'))[:35]
+            print(f'    {i}. ${t.get("size")} | {t.get("side")} | {t.get("price")} | {ts_str}')
+            print(f'       {title}')
+
+        # 策略推断
+        print('\n' + '─' * 70)
+        print('【交易风格推断】')
+        print('─' * 70)
+
+        # 价格倾向
+        if high_pct > 60:
+            bias = "高概率倾向 (倾向于购买 YES/高价选项)"
+        elif low_pct > 60:
+            bias = "低概率倾向 (倾向于购买 NO/低价选项)"
+        else:
+            bias = "均衡 (无明显倾向)"
+
+        print(f'  价格倾向:  {bias}')
+
+        # 仓位风格
+        if avg_size > 50:
+            size_style = "大仓位 (均值 > $50)"
+        elif avg_size < 20:
+            size_style = "小仓位 (均值 < $20)"
+        else:
+            size_style = "中等仓位 ($20-50)"
+        print(f'  仓位风格:  {size_style}')
+
+        # 综合风格
+        if high_pct > 60 and avg_size > 50:
+            overall_style = "激进型 - 追涨、大仓位"
+        elif low_pct > 60 and avg_size < 20:
+            overall_style = "保守型 - 抄底、小仓位"
+        elif 40 <= high_pct <= 60:
+            overall_style = "均衡型 - 价格均衡、仓位适中"
+        else:
+            overall_style = "混合型"
+
+        print(f'  综合风格:  {overall_style}')
+
+        # 跟单建议
+        print('\n' + '=' * 70)
+        print('【跟单建议参数】')
+        print('=' * 70)
+
+        if overall_style == "激进型 - 追涨、大仓位":
+            copy_amount = 5
+            max_copy = 20
+            time_window = 180
+            allow_dca = False
+            rationale = "激进型，建议小仓位试探、短期跟随"
+        elif overall_style == "保守型 - 抄底、小仓位":
+            copy_amount = 20
+            max_copy = 100
+            time_window = 600
+            allow_dca = True
+            rationale = "保守型，建议大仓位、长期跟随、允许加仓"
+        else:
+            copy_amount = 10
+            max_copy = 50
+            time_window = 300
+            allow_dca = False
+            rationale = "均衡型，建议中等参数"
+
+        print(f'\n  建议跟单金额:    ${copy_amount}')
+        print(f'  最大跟单金额:    ${max_copy}')
+        print(f'  时间窗口:        {time_window} 秒')
+        print(f'  允许 DCA:        {"是" if allow_dca else "否"}')
+        print(f'\n  理由: {rationale}')
+
+        # 命令示例
+        print('\n【执行命令】')
+        print(f'\n  python run_bot.py copy \\')
+        print(f'    --target-user {address} \\')
+        print(f'    --copy-amount {copy_amount} \\')
+        print(f'    --max-copy-size {max_copy} \\')
+        print(f'    --time-window {time_window}')
+        if allow_dca:
+            print(f'    --allow-dca')
+        print('\n' + '=' * 70)
+
+        # 保存分析结果到JSON
+        analysis_result = {
+            "address": address,
+            "analyzed_at": datetime.now().isoformat(),
+            "period_days": days,
+            "metrics": {
+                "total_trades": len(trades),
+                "buy_trades": len(buy_trades),
+                "sell_trades": len(sell_trades),
+                "total_volume": total_size,
+                "avg_trade_size": avg_size,
+                "avg_price": avg_price
+            },
+            "price_distribution": {
+                "high_price_count": len(high_price),
+                "low_price_count": len(low_price),
+                "high_pct": high_pct
+            },
+            "category_distribution": title_counts,
+            "style": {
+                "price_bias": bias,
+                "position_style": size_style,
+                "overall_style": overall_style
+            },
+            "recommendations": {
+                "copy_amount": copy_amount,
+                "max_copy_size": max_copy,
+                "time_window": time_window,
+                "allow_dca": allow_dca,
+                "rationale": rationale
+            }
+        }
+
+        # 保存到文件
+        result_file = f"market_analysis/trader_{address[:8]}_analysis.json"
+        import os
+        os.makedirs("market_analysis", exist_ok=True)
+        with open(result_file, 'w', encoding='utf-8') as f:
+            json.dump(analysis_result, f, indent=2, ensure_ascii=False)
+        print(f"\n📁 分析结果已保存到: {result_file}")
 
     except Exception as e:
         print(f"\n分析出错: {e}")
