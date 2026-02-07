@@ -1,5 +1,7 @@
 # Environment variables
 .env
+.env.local
+.env.*.local
 
 # Python
 __pycache__/
@@ -55,3 +57,40 @@ htmlcov/
 *.key
 *.pem
 secrets/
+
+# ========================
+# Project-specific files
+# ========================
+
+# Data files (contain sensitive trading data)
+*.json
+!*.example.json
+!schema*.json
+
+# Trading history
+trade_history.csv
+*.csv
+
+# Bot state files
+bot.pid
+*.pid
+
+# Analysis cache
+market_analysis/
+analysis/
+
+# Virtual positions (dry-run data)
+virtual_positions.json
+virtual_positions_backup.json
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Backup files
+*.bak
+*.backup
+*~
+\#*\#
